@@ -5,7 +5,7 @@ from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-BOT_TOKEN = 8634019645:AAGdLtgxl5GMjq-mw6jdDOIAbKTdOfCBUyQ
+BOT_TOKEN = "8634019645:AAErehXl6uTTnw2IaoZ31afOkaZhO0xCLa4"
 ADMIN_ID = 7601846213
 
 USERS_FILE = "users.json"
