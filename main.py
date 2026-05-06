@@ -20,10 +20,8 @@ POLL_OPTIONS = [
 
 CHOOSING = 1
 WRITING_COMMENT = 2
-CONFIRM_CHANGE = 3
-WRITING_CHANGE_REASON = 4
-CHOOSING_NEW = 5
-WRITING_NEW_COMMENT = 6
+WRITING_REPEAT_REASON = 3
+CHOOSING_NEW = 4
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -74,31 +72,17 @@ def build_poll_keyboard():
     ])
 
 
-def build_comment_keyboard():
+def build_new_poll_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Sabab yozish (ixtiyoriy)", callback_data="write_comment")],
-        [InlineKeyboardButton("Tugatish", callback_data="no_comment")]
+        [InlineKeyboardButton(text, callback_data="newvote_" + code)]
+        for code, text in POLL_OPTIONS
     ])
 
 
-def build_new_comment_keyboard():
+def build_after_vote_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Sabab yozish (ixtiyoriy)", callback_data="write_new_comment")],
-        [InlineKeyboardButton("Tugatish", callback_data="no_new_comment")]
-    ])
-
-
-def build_confirm_change_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Ha, o'zgartirmoqchiman", callback_data="yes_change")],
-        [InlineKeyboardButton("Yo'q, qoldiraman", callback_data="no_change")]
-    ])
-
-
-def build_change_reason_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Sabab yozish (ixtiyoriy)", callback_data="write_change_reason")],
-        [InlineKeyboardButton("Sababsiz yuborish", callback_data="no_change_reason")]
+        [InlineKeyboardButton("Izoh qoldirish (ixtiyoriy)", callback_data="add_comment")],
+        [InlineKeyboardButton("Qayta ovoz berish", callback_data="request_revote")],
     ])
 
 
@@ -134,179 +118,163 @@ def build_approve_keyboard(user_id):
     ])
 
 
-async def notify_admin_new_vote(context, user_id, choice_text, comment):
-    name, username = get_user_info(user_id)
-    text = "Yangi ovoz!\n\n" + name + " (@" + username + ")\nTanladi: " + choice_text + "\nIzohi: " + comment + "\n\n" + build_stats_text()
-    try:
-        await context.bot.send_message(chat_id=ADMIN_ID, text=text, reply_markup=build_admin_keyboard())
-    except Exception as e:
-        logger.error(e)
-
-
-# ── START ──────────────────────────────────────────────
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     save_user(user.id, user.username, user.full_name)
     results = load_json(RESULTS_FILE)
     user_data = results.get(str(user.id), {})
 
-    if user_data.get("submitted") and not user_data.get("can_revote"):
+    if user_data.get("submitted"):
+        choice_text = user_data.get("choice_text", "-")
         await update.message.reply_text(
-            "Siz allaqachon ovoz berdingiz.\n\nJavobingizni o'zgartirmoqchimisiz?",
-            reply_markup=build_confirm_change_keyboard()
+            "Siz allaqachon ovoz berdingiz.\n\nTanlaganingiz:\n" + choice_text,
+            reply_markup=build_after_vote_keyboard()
         )
-        return CONFIRM_CHANGE
+        return WRITING_COMMENT
 
     await update.message.reply_text(
-        "Assalomu alaykum!\n\nBu sorovnoma ANONIM.\n\nQuyidagilardan birini tanlang:",
+        "Assalomu alaykum!\n\nBu sorovnoma ANONIM.\n\nQuyidagi rahbarlarning qaysi birining ishida kamchilik bor, birini tanlang:",
         reply_markup=build_poll_keyboard()
     )
     return CHOOSING
 
 
-# ── 1-MARTA OVOZ BERISH ────────────────────────────────
-
 async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    user = query.from_user
     code = query.data.replace("vote_", "")
     chosen_text = next((t for c, t in POLL_OPTIONS if c == code), "")
-    context.user_data["choice"] = code
-    context.user_data["choice_text"] = chosen_text
+
+    results = load_json(RESULTS_FILE)
+    results[str(user.id)] = {
+        "choice": code,
+        "choice_text": chosen_text,
+        "comment": "-",
+        "submitted": True,
+        "can_revote": False,
+        "submitted_at": datetime.now().strftime("%d.%m.%Y %H:%M")
+    }
+    save_json(RESULTS_FILE, results)
+
     await query.edit_message_text(
-        "Siz tanladingiz:\n" + chosen_text + "\n\nIzoh qoldirmoqchimisiz?",
-        reply_markup=build_comment_keyboard()
+        "Siz tanladingiz:\n" + chosen_text + "\n\nRahmat! Agar javobingizni o'zgartirmoqchi bo'lsangiz pastdagi tugmani bosing.",
+        reply_markup=build_after_vote_keyboard()
     )
+
+    name, username = get_user_info(user.id)
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text="Yangi ovoz!\n\n" + name + " (@" + username + ")\nTanladi: " + chosen_text + "\n\n" + build_stats_text(),
+            reply_markup=build_admin_keyboard()
+        )
+    except Exception as e:
+        logger.error(e)
+
     return WRITING_COMMENT
 
 
-async def handle_write_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_add_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("Izohingizni yozing:")
     return WRITING_COMMENT
 
 
-async def handle_no_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    return await save_vote(context, query.from_user, "Izoh qoldirilmadi", query)
-
-
 async def handle_comment_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await save_vote(context, update.effective_user, update.message.text, update)
+    user = update.effective_user
+    comment = update.message.text
 
-
-async def save_vote(context, user, comment, update_obj):
-    choice = context.user_data.get("choice", "-")
-    choice_text = context.user_data.get("choice_text", "-")
     results = load_json(RESULTS_FILE)
-    results[str(user.id)] = {
-        "choice": choice,
-        "choice_text": choice_text,
-        "comment": comment,
-        "submitted": True,
-        "can_revote": False,
-        "submitted_at": datetime.now().strftime("%d.%m.%Y %H:%M")
-    }
-    save_json(RESULTS_FILE, results)
-    msg = "Ovozingiz qabul qilindi!\n\nSiz tanladingiz:\n" + choice_text + "\n\nRahmat!\n\nAgar javobingizni o'zgartirmoqchi bo'lsangiz, /start buyrug'ini yozing."
-    if hasattr(update_obj, "edit_message_text"):
-        await update_obj.edit_message_text(msg)
-    else:
-        await update_obj.message.reply_text(msg)
-    await notify_admin_new_vote(context, user.id, choice_text, comment)
-    return ConversationHandler.END
+    if str(user.id) in results:
+        results[str(user.id)]["comment"] = comment
+        save_json(RESULTS_FILE, results)
 
-
-# ── JAVOBNI O'ZGARTIRISH ───────────────────────────────
-
-async def handle_confirm_yes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text(
-        "Rostdan ham javobingizni o'zgartirmoqchimisiz?\n\nSababini yozing yoki sababsiz yuboring:",
-        reply_markup=build_change_reason_keyboard()
+    choice_text = results[str(user.id)].get("choice_text", "-")
+    await update.message.reply_text(
+        "Izohingiz saqlandi!\n\nTanlaganingiz:\n" + choice_text,
+        reply_markup=build_after_vote_keyboard()
     )
-    return WRITING_CHANGE_REASON
 
-
-async def handle_confirm_no(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text("Yaxshi, javobingiz o'zgarishsiz qoldi.")
-    return ConversationHandler.END
-
-
-async def handle_write_change_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text("Sababingizni yozing:")
-    return WRITING_CHANGE_REASON
-
-
-async def handle_no_change_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await send_change_request(context, query.from_user, "Sabab ko'rsatilmadi")
-    await query.edit_message_text("Arizangiz yuborildi. Admin ruxsat bersa xabar olasiz.")
-    return ConversationHandler.END
-
-
-async def handle_change_reason_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reason = update.message.text
-    await send_change_request(context, update.effective_user, reason)
-    await update.message.reply_text("Arizangiz yuborildi. Admin ruxsat bersa xabar olasiz.")
-    return ConversationHandler.END
-
-
-async def send_change_request(context, user, reason):
     name, username = get_user_info(user.id)
     try:
         await context.bot.send_message(
             chat_id=ADMIN_ID,
-            text="Javobni o'zgartirish talabi!\n\n" + name + " (@" + username + ")\nSababi: " + reason,
+            text="Izoh qoldirildi!\n\n" + name + " (@" + username + ")\nIzohi: " + comment
+        )
+    except Exception as e:
+        logger.error(e)
+
+    return WRITING_COMMENT
+
+
+async def handle_request_revote(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "Agar xohlasangiz, sababini yozing.\nBu ixtiyoriy — xabar yubormасangiz ham bo'ladi, admin baribir xabar oladi.\n\nSababingizni yozing yoki /skip yozing:"
+    )
+    return WRITING_REPEAT_REASON
+
+
+async def handle_repeat_reason_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    reason = update.message.text
+    if reason == "/skip":
+        reason = "Sabab ko'rsatilmadi"
+    await update.message.reply_text("Arizangiz yuborildi. Admin javob berguncha kuting.")
+    await send_revote_request(context, user, reason)
+    return ConversationHandler.END
+
+
+async def send_revote_request(context, user, reason):
+    name, username = get_user_info(user.id)
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text="Qayta ovoz berish talabi!\n\n" + name + " (@" + username + ")\nSababi: " + reason,
             reply_markup=build_approve_keyboard(user.id)
         )
     except Exception as e:
         logger.error(e)
 
 
-# ── QAYTA OVOZ (admin ruxsatidan keyin) ───────────────
-
 async def handle_new_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    code = query.data.replace("new_vote_", "")
+    user = query.from_user
+    code = query.data.replace("newvote_", "")
     chosen_text = next((t for c, t in POLL_OPTIONS if c == code), "")
-    context.user_data["choice"] = code
-    context.user_data["choice_text"] = chosen_text
+
+    results = load_json(RESULTS_FILE)
+    results[str(user.id)] = {
+        "choice": code,
+        "choice_text": chosen_text,
+        "comment": "-",
+        "submitted": True,
+        "can_revote": False,
+        "submitted_at": datetime.now().strftime("%d.%m.%Y %H:%M")
+    }
+    save_json(RESULTS_FILE, results)
+
     await query.edit_message_text(
-        "Yangi tanlovingiz:\n" + chosen_text + "\n\nIzoh qoldirmoqchimisiz?",
-        reply_markup=build_new_comment_keyboard()
+        "Yangi ovozingiz qabul qilindi!\n\nSiz tanladingiz:\n" + chosen_text + "\n\nRahmat!",
+        reply_markup=build_after_vote_keyboard()
     )
-    return WRITING_NEW_COMMENT
 
+    name, username = get_user_info(user.id)
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text="Ovoz o'zgartirildi!\n\n" + name + " (@" + username + ")\nYangi tanlovi: " + chosen_text + "\n\n" + build_stats_text(),
+            reply_markup=build_admin_keyboard()
+        )
+    except Exception as e:
+        logger.error(e)
 
-async def handle_write_new_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text("Izohingizni yozing:")
-    return WRITING_NEW_COMMENT
+    return WRITING_COMMENT
 
-
-async def handle_no_new_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    return await save_vote(context, query.from_user, "Izoh qoldirilmadi", query)
-
-
-async def handle_new_comment_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await save_vote(context, update.effective_user, update.message.text, update)
-
-
-# ── ADMIN TUGMALARI ────────────────────────────────────
 
 async def handle_admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -347,15 +315,11 @@ async def handle_admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
         if str(target_id) in results:
             results[str(target_id)]["can_revote"] = True
             save_json(RESULTS_FILE, results)
-        new_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton(text, callback_data="new_vote_" + code)]
-            for code, text in POLL_OPTIONS
-        ])
         try:
             await context.bot.send_message(
                 chat_id=target_id,
                 text="Admin qayta ovoz berishga ruxsat berdi!\n\nYangi javobingizni tanlang:",
-                reply_markup=new_keyboard
+                reply_markup=build_new_poll_keyboard()
             )
             await query.edit_message_text("Ruxsat berildi.")
         except Exception as e:
@@ -366,7 +330,7 @@ async def handle_admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             await context.bot.send_message(
                 chat_id=target_id,
-                text="Afsuski, admin javobni o'zgartirishga ruxsat bermadi."
+                text="Afsuski, admin qayta ovoz berishga ruxsat bermadi."
             )
             await query.edit_message_text("Rad etildi.")
         except Exception as e:
@@ -397,29 +361,20 @@ def main():
         entry_points=[CommandHandler("start", start)],
         states={
             CHOOSING: [
-                CallbackQueryHandler(handle_choice, pattern="^vote_")
+                CallbackQueryHandler(handle_choice, pattern="^vote_"),
             ],
             WRITING_COMMENT: [
-                CallbackQueryHandler(handle_write_comment, pattern="^write_comment$"),
-                CallbackQueryHandler(handle_no_comment, pattern="^no_comment$"),
+                CallbackQueryHandler(handle_add_comment, pattern="^add_comment$"),
+                CallbackQueryHandler(handle_request_revote, pattern="^request_revote$"),
+                CallbackQueryHandler(handle_new_choice, pattern="^newvote_"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_comment_text),
             ],
-            CONFIRM_CHANGE: [
-                CallbackQueryHandler(handle_confirm_yes, pattern="^yes_change$"),
-                CallbackQueryHandler(handle_confirm_no, pattern="^no_change$"),
-            ],
-            WRITING_CHANGE_REASON: [
-                CallbackQueryHandler(handle_write_change_reason, pattern="^write_change_reason$"),
-                CallbackQueryHandler(handle_no_change_reason, pattern="^no_change_reason$"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_change_reason_text),
+            WRITING_REPEAT_REASON: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_repeat_reason_text),
+                CommandHandler("skip", handle_repeat_reason_text),
             ],
             CHOOSING_NEW: [
-                CallbackQueryHandler(handle_new_choice, pattern="^new_vote_")
-            ],
-            WRITING_NEW_COMMENT: [
-                CallbackQueryHandler(handle_write_new_comment, pattern="^write_new_comment$"),
-                CallbackQueryHandler(handle_no_new_comment, pattern="^no_new_comment$"),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_new_comment_text),
+                CallbackQueryHandler(handle_new_choice, pattern="^newvote_"),
             ],
         },
         fallbacks=[CommandHandler("start", start)],
