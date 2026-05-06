@@ -77,7 +77,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     save_user(user.id, user.username, user.full_name)
     await update.message.reply_text(
-        "Salom!\n\nBu sorovnoma ANONIM.\nSorovnoma tez orada yuboriladi."
+        "Salom!\n\nBu sorovnoma ANONIM.\nJavoblaringiz faqat umumiy statistika sifatida korinadi."
+    )
+    await update.message.reply_text(
+        POLL_QUESTION,
+        reply_markup=build_keyboard(user.id)
     )
     users = load_users()
     try:
