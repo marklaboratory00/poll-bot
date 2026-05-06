@@ -1,4 +1,4 @@
-""
+"""
 Телеграм бот — рассылка опроса с приватными результатами
 Требования: pip install python-telegram-bot==20.7
 
@@ -23,8 +23,8 @@ from telegram.ext import (
 # ========================
 # НАСТРОЙКИ — ЗАПОЛНИТЕ!
 # ========================
-BOT_TOKEN = "8634019645:AAGdLtgxl5GMjq-mw6jdDOIAbKTdOfCBUyQ"
-ADMIN_ID = 7601846213
+BOT_TOKEN = "ВАШ_ТОКЕН_ОТ_BOTFATHER"
+ADMIN_ID = 123456789  # Ваш Telegram ID (узнать через @userinfobot)
 USERS_FILE = "users.json"
 RESULTS_FILE = "results.json"
 
