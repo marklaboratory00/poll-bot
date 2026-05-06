@@ -213,7 +213,7 @@ async def handle_request_revote(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(
-        "Agar xohlasangiz, sababini yozing.\nBu ixtiyoriy — xabar yubormасangiz ham bo'ladi, admin baribir xabar oladi.\n\nSababingizni yozing yoki /skip yozing:"
+        "Agar xohlasangiz, sababini yozing.\nBu ixtiyoriy. \n\nSababingizni yozing yoki /skip tugmasini bosing:"
     )
     return WRITING_REPEAT_REASON
 
